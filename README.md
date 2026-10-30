@@ -135,7 +135,7 @@ cd sender
 | 功能 | 说明 |
 |---|---|
 | 扫描板子 | 自动找 `ESP32_HID_KEY` 并连接 |
-| 文本区 | 可编辑，实时显示字符数 / 字节数 / 非 ASCII 字符数 |
+| 文本区 | 可编辑，实时显示字符数 / 字节数；含板子打不出的字符时标红，点发送会被拦下 |
 | **剪贴板历史** | 保存最近 **10 条**，双击载入文本框；落盘持久化，重启不丢 |
 | 从剪贴板填入 | 手动拉一次剪贴板 |
 | 监听剪贴板 | 勾上后「复制即发」，每 0.8s 检查一次 |
@@ -156,6 +156,8 @@ python3 sender/send_clipboard.py            # 发一次剪贴板
 python3 sender/send_clipboard.py --watch    # 复制即发
 python3 sender/send_clipboard.py --clear    # 清空板子
 python3 sender/send_clipboard.py --scan     # 只扫设备
+python3 sender/send_clipboard.py --strip    # 剔除不支持字符后再发
+python3 sender/send_clipboard.py --force    # 明知有缺字也照发
 ```
 
 ## BLE 协议
@@ -186,7 +188,8 @@ python3 sender/send_clipboard.py --scan     # 只扫设备
 
 ## 已知限制
 
-- **只支持 ASCII**：中文、日文、emoji、Tab、方向键、Ctrl 组合键都不支持，固件逐字符映射 US 键盘 scancode。App 会提前提示非 ASCII 字符数。
+- **只支持 ASCII**：板子按 US 键盘 scancode 逐字符输出，只认 `A-Z a-z 0-9`、常见半角标点（`!@#$%^&*()_+-=[]{};:'",./<>?` 以及反引号、竖线、反斜杠）、空格和换行，合计 95 个可见字符 + `\n`。中文、日文、emoji、全角标点、Tab、方向键、Ctrl 组合键一律不支持。
+- **不支持的字符会被拦下**：判定表和固件里的 `isSupportedChar()` 一一对应（`sender/hid_chars.py`）。App 信息栏标红，点「发送到板子」时弹出首个出错位置（第几行第几列）和涉及字符，可以选择剔除后再发；勾了「监听剪贴板」时只在日志里记一条并跳过，不弹窗打断。命令行版默认拦下并以退出码 2 结束，需要时用 `--strip` 剔除或 `--force` 强发。
 - **目标机必须处于英文输入法**：停在拼音输入法上，敲 ASCII 也会进候选框变成中文。
 - **单条文本上限 64KB**（约 6 万字），再大容易 malloc 失败。
 - **漏字符**：远程桌面 / VPC 里把固件里的 `CHAR_DELAY` 从 80 调到 120~200。

@@ -33,6 +33,8 @@ except ImportError:
     )
     raise SystemExit(1)
 
+import hid_chars
+
 DEVICE_NAME = "ESP32_HID_KEY"
 RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 TX_CHAR = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
@@ -243,6 +245,14 @@ class BleWorker(threading.Thread):
         data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         if not data:
             self.emit("log", "✗ 文本为空")
+            return
+
+        # 兜底：界面已经拦过一道，这里再守一层，防止别的调用方绕过
+        res = hid_chars.scan(hid_chars.normalize_newlines(text))
+        if not res.ok:
+            self.emit("log",
+                      f"✗ 拒绝发送：含 {res.count} 个不支持字符"
+                      f"（第{res.line}行第{res.col}列）")
             return
         if len(data) > TEXT_LIMIT:
             self.emit("log", f"✗ 超过 64KB 上限（{len(data)} 字节）")
@@ -485,12 +495,12 @@ class App:
     def refresh_info(self):
         s = self.get_text()
         nbytes = len(s.encode("utf-8"))
-        bad = sum(1 for ch in s if ord(ch) > 127)
+        res = hid_chars.scan(s)
         msg = f"{len(s)} 字符 · {nbytes} 字节"
         color = "#888"
-        if bad:
-            msg += f"   ⚠ 含 {bad} 个非 ASCII 字符，板子会跳过"
-            color = self.PALETTE["orange"]
+        if not res.ok:
+            msg += f"   ⚠ {res.count} 个不支持字符 · 第{res.line}行第{res.col}列 · 发送会被拦下"
+            color = self.PALETTE["red"]
         if nbytes > TEXT_LIMIT:
             msg += "   ⚠ 超过 64KB 上限"
             color = self.PALETTE["red"]
@@ -525,10 +535,17 @@ class App:
         if h != self.last_clip_hash:
             self.last_clip_hash = h
             if s.strip():
+                s = hid_chars.normalize_newlines(s)
+                res = hid_chars.scan(s)
                 self.set_text(s)
                 self.add_history(s)
-                self.log(f"剪贴板变化：{len(s)} 字符，自动发送")
-                self.on_send()
+                if res.ok:
+                    self.log(f"剪贴板变化：{len(s)} 字符，自动发送")
+                    self.on_send(interactive=False)
+                else:
+                    self.log(
+                        f"⚠ 剪贴板含 {res.count} 个不支持字符"
+                        f"（第{res.line}行第{res.col}列 {hid_chars.show_char(res.char)}），未发送")
         self.watch_job = self.root.after(800, self._watch_tick)
 
     # -- 历史
@@ -581,11 +598,43 @@ class App:
     def on_disconnect(self):
         self.worker.submit(self.worker.disconnect())
 
-    def on_send(self):
-        text = self.get_text()
+    def on_send(self, interactive=True):
+        text = hid_chars.normalize_newlines(self.get_text())
         if not text.strip():
-            messagebox.showinfo("没有内容", "文本框是空的。")
+            if interactive:
+                messagebox.showinfo("没有内容", "文本框是空的。")
             return
+
+        res = hid_chars.scan(text)
+        if not res.ok:
+            where = f"第 {res.line} 行第 {res.col} 列：{hid_chars.show_char(res.char)}"
+            if not interactive:
+                # 监听剪贴板时不能弹窗，否则每复制一次就打断一次
+                self.log(f"⚠ 含 {res.count} 个不支持字符（{where}），已跳过不发送")
+                return
+            proceed = messagebox.askyesno(
+                "有不支持字符，已拦下",
+                f"发现 {res.count} 个板子打不出来的字符，这次没有发送。\n\n"
+                f"首个位置：{where}\n"
+                f"涉及：{hid_chars.describe(res.chars)}\n\n"
+                "板子按 US 键盘逐字符输出，只认英文、数字、常见半角符号和换行。"
+                "中文、emoji、全角标点、Tab 都会被跳过，硬发过去就是缺字。\n\n"
+                "要剔除这些字符后再发送吗？",
+            )
+            if not proceed:
+                self.log(f"已取消发送：{res.count} 个不支持字符未处理")
+                return
+            cleaned = hid_chars.strip_unsupported(text)
+            if not cleaned.strip():
+                messagebox.showwarning(
+                    "剔除后为空", f"把这 {res.count} 个字符剔掉之后就没剩什么可发的了。")
+                return
+            self.set_text(cleaned)
+            self.log(
+                f"已剔除 {res.count} 个不支持字符（{hid_chars.describe(res.chars, 3)}），"
+                f"现 {len(cleaned)} 字符")
+            text = cleaned
+
         self.add_history(text)
         self.worker.submit(self.worker.send(text))
 

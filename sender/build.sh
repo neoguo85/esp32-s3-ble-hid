@@ -8,6 +8,7 @@ rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp app.py "$APP/Contents/Resources/app.py"
+cp hid_chars.py "$APP/Contents/Resources/hid_chars.py"
 cp Info.plist "$APP/Contents/Info.plist"
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Resources/assets"
