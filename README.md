@@ -60,6 +60,48 @@ BLE 用的是板包自带的 BLE 库，不需要额外装库。
 
 ## 编译烧录
 
+> **端口号不是固定的。** 下面所有命令里的 `-p <PORT>` 都是占位符，必须换成你在第 1 步里查到的那个值。
+> 本文出现的 `/dev/cu.usbserial-1420`、`COM3` 只是举例，**照抄一定失败**。
+
+### 1. 查端口
+
+板子用数据线插**右侧 UART 口**（左边那个原生 USB 口是输出键盘用的，不负责烧录），然后：
+
+```bash
+arduino-cli board list
+```
+
+输出长这样，`Port` 那列就是要用的端口：
+
+```
+Port                            Protocol Type        Board Name  FQBN Core
+/dev/cu.usbserial-1420          serial   Serial Port Unknown
+/dev/cu.Bluetooth-Incoming-Port serial   Serial Port Unknown
+/dev/cu.debug-console           serial   Serial Port Unknown
+```
+
+一台机器上通常挂着好几个 `cu.Bluetooth-*`、`cu.debug-console`，认准名字里带下面这些词的（**下表是举例，实际值以你屏幕上的为准**）：
+
+| 板载 USB 转串口芯片 | macOS 端口名样子 | Windows 端口名样子 |
+|---|---|---|
+| CH340 / CH343 | `/dev/cu.usbserial-*`、`/dev/cu.wchusbserial*` | `COM3` 之类 |
+| CP2102 | `/dev/cu.SLAB_USBtoUART`、`/dev/cu.usbserial-*` | `COM3` 之类 |
+| 原生 USB（S3 自带） | `/dev/cu.usbmodem*` | `COM3` 之类 |
+
+不想装 arduino-cli 也能查：
+
+| 系统 | 方法 |
+|---|---|
+| macOS | `ls /dev/cu.*` |
+| Windows | 设备管理器 → **端口 (COM 和 LPT)** → 看到 `USB-SERIAL CH340 (COM3)` 就是它 |
+| Windows | PowerShell：`[System.IO.Ports.SerialPort]::GetPortNames()` |
+
+查到之后记下来，第 4、5 步用的必须是同一个值。
+
+### 2. 编译
+
+macOS / Linux：
+
 ```bash
 cd esp32_hid_key_ble
 arduino-cli compile --output-dir=build \
@@ -70,9 +112,13 @@ arduino-cli compile --output-dir=build \
   --build-property build.usb_cdc_on_boot=0 \
   --build-property build.flashmode=qio \
   --build-property build.flashfreq=80m .
+```
 
-arduino-cli board list
-arduino-cli upload -p /dev/cu.wchusbserial1420 --fqbn esp32:esp32:esp32s3 --input-dir=build .
+Windows（cmd 和 PowerShell 都贴这一整行。别用 `\` 续行 —— 那是 bash 的语法，cmd 用 `^`、PowerShell 用反引号，写成一行最省事）：
+
+```bat
+cd esp32_hid_key_ble
+arduino-cli compile --output-dir=build --fqbn esp32:esp32:esp32s3 --build-property build.partitions=default_16MB --build-property build.flash_size=16MB --build-property build.psram_type=opi --build-property build.usb_cdc_on_boot=0 --build-property build.flashmode=qio --build-property build.flashfreq=80m .
 ```
 
 实测输出：
@@ -84,7 +130,58 @@ Global variables use 60772 bytes (18%) of dynamic memory.
 
 参数一项都不能省：`psram_type=opi` 写错会 boot loop；`usb_cdc_on_boot=0` 不关，原生 USB 会枚举成串口，目标机认不到键盘。
 
-**进下载模式**：数据线插右侧 UART 口 → 按住 **BOOT** → 点一下 **EN** → 松开 EN → 保持 BOOT 约 1 秒再松开。
+### 3. 进下载模式
+
+数据线插右侧 UART 口 → 按住 **BOOT** → 点一下 **EN** → 松开 EN → 保持 BOOT 约 1 秒再松开。
+
+### 4. 烧录
+
+`-p` 后面填第 1 步查到的端口，把 `<PORT>` 整个替换掉（连尖括号一起删）：
+
+```bash
+# macOS / Linux —— 例如 -p /dev/cu.usbserial-1420
+arduino-cli upload -p <PORT> --fqbn esp32:esp32:esp32s3 --input-dir=build .
+```
+
+```bat
+:: Windows —— 例如 -p COM3
+arduino-cli upload -p <PORT> --fqbn esp32:esp32:esp32s3 --input-dir=build .
+```
+
+看到 `Hash of data verified.` 和 `Hard resetting via RTS pin...` 就是烧好了。
+
+### 5. 看串口日志（可选）
+
+固件在 115200 上会打连接、存盘、输出进度，排查时很有用：
+
+```bash
+# macOS / Linux —— 例如 -p /dev/cu.usbserial-1420
+arduino-cli monitor -p <PORT> -c baudrate=115200
+```
+
+```bat
+:: Windows —— 例如 -p COM3
+arduino-cli monitor -p <PORT> -c baudrate=115200
+```
+
+`Ctrl-C` 退出。注意固件把 USB CDC 关了（`usb_cdc_on_boot=0`），所以日志只从这个 UART 口出来 —— 插左边的原生 USB 口是看不到的，那边只有键盘。
+
+正常启动会看到类似：
+
+```
+[fs] no saved text
+[ready] BLE name: ESP32_HID_KEY, stored text: 0 bytes
+[ble] connected
+```
+
+### 端口相关的坑
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `board list` 里根本没有新端口 | 用了充电线（只有电源没数据线），或驱动没装 | 换一根确定的**数据线**；Windows 若看到黄色感叹号，装 CH340 驱动（看板子上 USB 口旁边那颗芯片的丝印） |
+| 端口在，但 upload 报 `Failed to connect` / `No serial data received` | 没进下载模式 | 按第 3 步重来，BOOT 一直按到日志出现 `Connecting...` 再松 |
+| 端口名是 `usbmodem`，且每次拔插都变 | 用了左侧原生 USB 口烧录 | 换右侧 UART 口，端口名就稳定了；非要用原生口，每次烧前重新 `board list` |
+| Windows 上 upload 报端口被占用 | 串口助手或 `monitor` 还开着 | 关掉占用的程序再烧 |
 
 ## 图形界面（macOS / Windows）
 
