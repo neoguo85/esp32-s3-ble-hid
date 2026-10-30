@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-把 macOS 剪贴板内容通过 BLE 发到 ESP32-S3 HID 板子。
+把剪贴板内容通过 BLE 发到 ESP32-S3 HID 板子（macOS / Windows 通用）。
 
 板子收到后写入 Flash（断电不丢），插到 Windows 上按 BOOT 即用标准 USB 键盘输出，
 目标机零安装。
 
 依赖:
-    pip3 install bleak
+    pip3 install bleak        # Windows 用 python -m pip install bleak
 
 用法:
     python3 send_clipboard.py                # 发送当前剪贴板
@@ -26,23 +26,48 @@ import sys
 try:
     from bleak import BleakClient, BleakScanner
 except ImportError:
-    sys.exit("缺少依赖，请先执行:  pip3 install bleak")
+    _cmd = "python -m pip install bleak" if sys.platform.startswith("win") else "pip3 install bleak"
+    sys.exit(f"缺少依赖，请先执行:  {_cmd}")
+
+IS_MAC = sys.platform == "darwin"
+
+# Windows 控制台是 cp936 / cp1252，碰到编不出的字符会抛 UnicodeEncodeError。
+# 只改错误策略、不改编码，中文照常显示，生僻符号退化成 "?" 而不是崩掉。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 DEVICE_NAME = "ESP32_HID_KEY"
 RX_CHAR = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 TX_CHAR = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-CHUNK = 180          # 单片字节数（macOS 通常协商到 MTU 185）
+CHUNK = 180          # 单片字节数（通常协商到 MTU 185）
 CHUNK_GAP = 0.004    # 片间间隔，太快的个别适配器会丢包
 ACK_TIMEOUT = 30.0
 
 
+_tk_clip = None
+
+
 def read_clipboard() -> bytes:
-    """用 pbpaste 读剪贴板，避免额外依赖。"""
-    r = subprocess.run(["pbpaste"], capture_output=True)
-    if r.returncode != 0:
-        raise SystemExit("读取剪贴板失败：pbpaste 返回非零")
-    return r.stdout
+    """读系统剪贴板。macOS 走 pbpaste，Windows 借 tkinter，都不引第三方库。"""
+    if IS_MAC:
+        r = subprocess.run(["pbpaste"], capture_output=True)
+        if r.returncode != 0:
+            raise SystemExit("读取剪贴板失败：pbpaste 返回非零")
+        return r.stdout
+
+    global _tk_clip
+    if _tk_clip is None:
+        import tkinter as tk
+        _tk_clip = tk.Tk()
+        _tk_clip.withdraw()
+    try:
+        return _tk_clip.clipboard_get().encode("utf-8")
+    except Exception:
+        return b""
 
 
 def ascii_report(data: bytes) -> str:
@@ -50,7 +75,7 @@ def ascii_report(data: bytes) -> str:
     bad = sum(1 for b in data if b > 127)
     if bad == 0:
         return ""
-    return f"  ⚠ 含 {bad} 个非 ASCII 字节（中文/emoji 等），板子会跳过这些字符"
+    return f"  [!] 含 {bad} 个非 ASCII 字节（中文/emoji 等），板子会跳过这些字符"
 
 
 async def find_device(timeout: float = 10.0):
@@ -58,7 +83,7 @@ async def find_device(timeout: float = 10.0):
     if dev is None:
         raise SystemExit(
             f"找不到 {DEVICE_NAME}。检查：板子是否上电、是否已被别的设备连走、"
-            f"Mac 蓝牙是否打开。"
+            f"本机蓝牙是否打开。"
         )
     return dev
 
@@ -106,7 +131,7 @@ async def send_bytes(data: bytes) -> None:
         print(f"· 耗时 {elapsed:.1f}s，约 {rate:.1f} KB/s")
 
         if result.startswith("OK"):
-            print("✅ 已存入板子。拔下插到目标机，点好输入框，按 BOOT 开始输出。")
+            print("[OK] 已存入板子。拔下插到目标机，点好输入框，按 BOOT 开始输出。")
 
 
 async def scan():
@@ -137,7 +162,7 @@ async def watch(interval: float):
         try:
             await send_bytes(data)
         except Exception as e:
-            print(f"✗ 发送失败：{e}")
+            print(f"[X] 发送失败：{e}")
 
 
 def main():

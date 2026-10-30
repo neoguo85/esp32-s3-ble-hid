@@ -6,3 +6,10 @@ build/
 *.elf
 *.map
 *.bin
+
+# Windows 打包（build.bat）
+.venv/
+dist/
+*.spec
+__pycache__/
+*.pyc

@@ -1,0 +1,3 @@
+# ESP32 HID Sender 的运行依赖
+# tkinter 由 Python 自带（Windows 官方安装包默认包含，不需要单独装）
+bleak>=0.22.0

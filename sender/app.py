@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-ESP32 HID Sender — macOS 图形界面
+ESP32 HID Sender — 图形界面（macOS / Windows 通用）
 
 把剪贴板 / 文本框内容通过 BLE 发到 ESP32-S3 HID 板子，板子存 Flash 后
 插到目标机（如不能装软件的 Windows VPC）按 BOOT 即用标准键盘输出。
 
-依赖: bleak（BLE）、tkinter（系统自带 GUI）
+依赖: bleak（BLE）、tkinter（Python 自带 GUI）
 """
 
 import asyncio
@@ -24,11 +24,12 @@ from tkinter import messagebox, ttk
 try:
     from bleak import BleakClient, BleakScanner
 except ImportError:
+    _pip = "python -m pip install bleak" if sys.platform.startswith("win") else "pip3 install bleak"
     root = tk.Tk()
     root.withdraw()
     messagebox.showerror(
         "缺少依赖",
-        "未安装 bleak。请在终端执行：\n\n    pip3 install bleak\n\n然后重新打开本 App。",
+        f"未安装 bleak。请先执行：\n\n    {_pip}\n\n然后重新打开本 App。",
     )
     raise SystemExit(1)
 
@@ -42,18 +43,63 @@ CHUNK = 180
 CHUNK_GAP = 0.004
 SCAN_TIMEOUT = 15.0
 
-APP_SUPPORT = os.path.expanduser("~/Library/Application Support/ESP32HIDSender")
+IS_MAC = sys.platform == "darwin"
+IS_WIN = sys.platform.startswith("win")
+
+# --windowed 打包后 stdout 可能是 None；控制台里则可能是 cp936 / cp1252。
+# 只把错误策略改成 replace，避免打日志时抛 UnicodeEncodeError。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+def _app_support_dir() -> str:
+    if IS_WIN:
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "ESP32HIDSender")
+    return os.path.expanduser("~/Library/Application Support/ESP32HIDSender")
+
+
+APP_SUPPORT = _app_support_dir()
 HISTORY_FILE = os.path.join(APP_SUPPORT, "history.json")
+
+
+def _ui_scale(root) -> float:
+    """Windows 高分屏（150% / 200%）下把窗口尺寸按比例放大。
+
+    开了 DPI 感知以后 Tk 的磅值字体会跟着放大，但 geometry 里的像素不会，
+    不乘这个系数窗口会显得偏小、控件挤在一起。macOS 一律返回 1.0。
+    """
+    if not IS_WIN:
+        return 1.0
+    try:
+        # tk scaling = 每磅多少像素，96 DPI 时是 96/72 ≈ 1.333
+        s = float(root.tk.call("tk", "scaling")) / (96.0 / 72.0)
+        return max(1.0, min(s, 3.0))
+    except Exception:
+        return 1.0
 
 
 # ---------------------------------------------------------------- 剪贴板 / 历史
 
+_tk_root = None          # Windows 上借 tk 读剪贴板
+
+
 def read_clipboard() -> str:
-    try:
-        r = subprocess.run(["pbpaste"], capture_output=True, timeout=3)
-        return r.stdout.decode("utf-8", "replace")
-    except Exception:
-        return ""
+    if IS_MAC:
+        try:
+            r = subprocess.run(["pbpaste"], capture_output=True, timeout=3)
+            return r.stdout.decode("utf-8", "replace")
+        except Exception:
+            return ""
+    if _tk_root is not None:
+        try:
+            return _tk_root.clipboard_get()
+        except tk.TclError:
+            return ""
+    return ""
 
 
 def load_history():
@@ -212,7 +258,10 @@ class App:
     PALETTE = {"green": "#2ecc71", "orange": "#f39c12", "red": "#e74c3c", "gray": "#8e8e93"}
 
     def __init__(self, root: tk.Tk):
+        global _tk_root
+        _tk_root = root
         self.root = root
+        self.scale = _ui_scale(root)
         self.ui_queue = queue.Queue()
         self.history = load_history()
         self.last_clip_hash = None
@@ -227,27 +276,31 @@ class App:
         self.set_status("未连接", "gray")
         self.last_clip_hash = hashlib.md5(read_clipboard().encode()).hexdigest()
         self.pull_clipboard(silent=True)
-        self.log("就绪。点「扫描板子」开始。")
+        self.log(f"就绪（{'macOS' if IS_MAC else 'Windows'}）。点「扫描板子」开始。")
         self.root.after(80, self.poll_queue)
 
     # -- 构建
     def build_ui(self):
+        s = self.scale
         self.root.title("ESP32 HID Sender")
-        self.root.geometry("940x700")
-        self.root.minsize(780, 560)
-        self.center_window(940, 700)
+        self.root.geometry(f"{int(940 * s)}x{int(700 * s)}")
+        self.root.minsize(int(780 * s), int(560 * s))
+        self.center_window(int(940 * s), int(700 * s))
 
         base = tkfont.nametofont("TkDefaultFont").actual()
         family = base.get("family", "Helvetica")
-        self.f_mono = tkfont.Font(family="Menlo", size=12)
+        mono_family = "Menlo" if IS_MAC else "Consolas"
+        self.f_mono = tkfont.Font(family=mono_family, size=12)
         self.f_small = tkfont.Font(family=family, size=11)
         self.f_bold = tkfont.Font(family=family, size=12, weight="bold")
 
         style = ttk.Style()
-        try:
-            style.theme_use("aqua")
-        except tk.TclError:
-            pass
+        for theme in (("vista", "winnative", "xpnative") if IS_WIN else ("aqua",)):
+            try:
+                style.theme_use(theme)
+                break
+            except tk.TclError:
+                continue
 
         outer = ttk.Frame(self.root, padding=14)
         outer.pack(fill="both", expand=True)
@@ -271,7 +324,7 @@ class App:
         self.disc_btn = ttk.Button(bar, text="断开", command=self.on_disconnect, width=6)
         self.disc_btn.pack(side="right", padx=(0, 8))
 
-        self.progress = ttk.Progressbar(bar, length=140, mode="determinate", maximum=100)
+        self.progress = ttk.Progressbar(bar, length=int(140 * s), mode="determinate", maximum=100)
         self.progress.pack(side="right", padx=12)
 
         ttk.Separator(outer).grid(row=1, column=0, sticky="ew", pady=10)
@@ -281,7 +334,7 @@ class App:
         body.grid(row=2, column=0, sticky="nsew")
 
         # 先放右侧固定宽面板，再让左侧占满剩余
-        right = ttk.Frame(body, width=300)
+        right = ttk.Frame(body, width=int(300 * s))
         right.pack(side="right", fill="y", padx=(12, 0))
         right.pack_propagate(False)
 
@@ -349,7 +402,7 @@ class App:
 
         # —— 日志 ——
         ttk.Separator(outer).grid(row=5, column=0, sticky="ew", pady=10)
-        log_wrap = ttk.Frame(outer, height=150)
+        log_wrap = ttk.Frame(outer, height=int(150 * s))
         log_wrap.grid(row=6, column=0, sticky="ew")
         log_wrap.grid_propagate(False)
         self.log_text = tk.Text(log_wrap, height=7, font=self.f_small, bd=1, relief="solid",
@@ -533,25 +586,44 @@ class App:
         self.root.after(80, self.poll_queue)
 
 
+def _enable_hidpi():
+    """Windows 上开启 DPI 感知，否则高分屏字会发虚。"""
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def main():
+    _enable_hidpi()
     root = tk.Tk()
     app = App(root)
 
     if "--selftest" in sys.argv:
         root.update()
+        # 只用 ASCII 输出：英文版 Windows 控制台是 cp1252，打中文会
+        # UnicodeEncodeError，build.bat 会把它误判成构建失败。
         widgets = {
-            "窗口": (root.winfo_width(), root.winfo_height()),
-            "文本框": (app.text.winfo_width(), app.text.winfo_height()),
-            "历史列表": (app.hist_list.winfo_width(), app.hist_list.winfo_height()),
-            "日志区": (app.log_text.winfo_width(), app.log_text.winfo_height()),
-            "扫描按钮": (app.scan_btn.winfo_width(), app.scan_btn.winfo_height()),
-            "发送按钮": (app.send_btn.winfo_width(), app.send_btn.winfo_height()),
+            "window": (root.winfo_width(), root.winfo_height()),
+            "text": (app.text.winfo_width(), app.text.winfo_height()),
+            "history": (app.hist_list.winfo_width(), app.hist_list.winfo_height()),
+            "log": (app.log_text.winfo_width(), app.log_text.winfo_height()),
+            "scan btn": (app.scan_btn.winfo_width(), app.scan_btn.winfo_height()),
+            "send btn": (app.send_btn.winfo_width(), app.send_btn.winfo_height()),
         }
         for name, (w, h) in widgets.items():
-            flag = "OK" if w > 20 and h > 10 else "!! 尺寸异常"
-            print(f"  {name:<6} {w:>4} × {h:<4}  {flag}")
-        print("  窗口可见:", bool(root.winfo_ismapped()))
-        print("  历史条目数:", len(app.history))
+            flag = "ok" if w > 20 and h > 10 else "!! BAD SIZE"
+            print(f"  {name:<9} {w:>4} x {h:<4}  {flag}")
+        print("  visible  :", bool(root.winfo_ismapped()))
+        print("  history  :", len(app.history))
+        print("  platform :", "windows" if IS_WIN else ("macos" if IS_MAC else sys.platform))
+        print("  scale    :", app.scale)
         root.destroy()
         return
 
