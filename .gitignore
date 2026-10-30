@@ -1,0 +1,8 @@
+# macOS
+.DS_Store
+
+# arduino-cli / App 构建产物
+build/
+*.elf
+*.map
+*.bin
