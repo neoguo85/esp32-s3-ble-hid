@@ -9,6 +9,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp app.py "$APP/Contents/Resources/app.py"
 cp Info.plist "$APP/Contents/Info.plist"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+mkdir -p "$APP/Contents/Resources/assets"
+cp assets/appicon.png "$APP/Contents/Resources/assets/appicon.png"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 cat > "$APP/Contents/MacOS/ESP32HIDSender" <<'LAUNCH'

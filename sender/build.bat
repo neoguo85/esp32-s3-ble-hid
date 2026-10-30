@@ -52,10 +52,14 @@ if defined EXTRA echo     winrt found - it will be bundled
 if not defined EXTRA echo     winrt not found - nothing extra to bundle
 
 rem ---- build -----------------------------------------------------------
+rem app.ico     -> exe icon shown in Explorer and the taskbar
+rem appicon.png -> bundled as data so the Tk window icon matches
 echo.
 echo [6/6] Building the exe (1-3 minutes) ...
 "%VPY%" -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name "ESP32 HID Sender" ^
+    --icon "assets\app.ico" ^
+    --add-data "assets\appicon.png;assets" ^
     --collect-submodules bleak %EXTRA% ^
     app.py
 if errorlevel 1 goto build_fail

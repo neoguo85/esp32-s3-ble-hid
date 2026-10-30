@@ -66,6 +66,34 @@ APP_SUPPORT = _app_support_dir()
 HISTORY_FILE = os.path.join(APP_SUPPORT, "history.json")
 
 
+def _resource(*parts) -> str:
+    """定位随程序分发的资源文件。
+
+    源码运行时相对 app.py 所在目录；PyInstaller 打成 onefile 后，
+    数据文件会被解包到 sys._MEIPASS。
+    """
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
+def _set_window_icon(root):
+    """设置标题栏 / 任务栏图标。
+
+    macOS 的 Dock 图标由 .app 里 Info.plist 指定的 icns 决定，这里主要给
+    Windows 用 —— 否则任务栏和标题栏挂的是 Tk 的羽毛。缺图标不算错，静默跳过。
+    """
+    path = _resource("assets", "appicon.png")
+    if not os.path.exists(path):
+        return
+    try:
+        img = tk.PhotoImage(file=path)
+        div = max(1, img.width() // 64)
+        root.iconphoto(True, img.subsample(div))
+        root._icon_ref = img          # 别让图片被回收，否则图标会消失
+    except Exception:
+        pass
+
+
 def _ui_scale(root) -> float:
     """Windows 高分屏（150% / 200%）下把窗口尺寸按比例放大。
 
@@ -603,6 +631,7 @@ def _enable_hidpi():
 def main():
     _enable_hidpi()
     root = tk.Tk()
+    _set_window_icon(root)
     app = App(root)
 
     if "--selftest" in sys.argv:

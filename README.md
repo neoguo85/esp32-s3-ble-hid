@@ -39,7 +39,8 @@
 │   ├── send_clipboard.py        # 等价命令行版
 │   ├── requirements.txt         # bleak
 │   ├── build.sh  + Info.plist   # macOS：生成双击即用的 .app
-│   └── build.bat + run.bat      # Windows：打包 exe / 直接运行
+│   ├── build.bat + run.bat      # Windows：打包 exe / 直接运行
+│   └── assets/                  # 图标：icns / ico / png + 生成脚本
 └── LICENSE
 ```
 
@@ -145,6 +146,8 @@ cd sender
 
 - macOS `~/Library/Application Support/ESP32HIDSender/history.json`
 - Windows `%APPDATA%\ESP32HIDSender\history.json`
+
+图标在 `sender/assets/`：`AppIcon.icns`（macOS）、`app.ico`（Windows exe）、`appicon.png`（窗口图标）。想改图案就编辑 `assets/make_icon.py` 再跑 `python3 make_icon.py` 重新生成三个文件（需要 Pillow，平时用不到）。
 
 不想用图形界面时，`sender/send_clipboard.py` 是等价命令行版（两个平台通用）：
 
